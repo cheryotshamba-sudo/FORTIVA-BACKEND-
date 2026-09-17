@@ -52,7 +52,7 @@ app.use(cors());
 app.use(
   express.json({
     verify: (req, res, buf) => {
-      req.rawBody = buf;
+      req.rawBody = Buffer.from(buf);
     }
   })
 );
@@ -138,7 +138,6 @@ app.post("/api/register", async (req, res) => {
       password
     } = req.body;
 
-
     if (!fullName || !email || !phone || !password) {
 
       return res.status(400).json({
@@ -147,13 +146,11 @@ app.post("/api/register", async (req, res) => {
 
     }
 
-
     const cleanEmail =
       email.trim().toLowerCase();
 
     const cleanPhone =
       phone.trim();
-
 
     const existingUser =
       await pool.query(
@@ -169,7 +166,6 @@ app.post("/api/register", async (req, res) => {
         ]
       );
 
-
     if (existingUser.rows.length > 0) {
 
       return res.status(409).json({
@@ -179,17 +175,14 @@ app.post("/api/register", async (req, res) => {
 
     }
 
-
     const hashedPassword =
       await bcrypt.hash(
         password,
         10
       );
 
-
     const userId =
       crypto.randomUUID();
-
 
     await pool.query(
       `
@@ -214,7 +207,6 @@ app.post("/api/register", async (req, res) => {
       ]
     );
 
-
     res.status(201).json({
 
       message:
@@ -222,14 +214,12 @@ app.post("/api/register", async (req, res) => {
 
     });
 
-
   } catch (error) {
 
     console.error(
       "Registration error:",
       error
     );
-
 
     res.status(500).json({
       message: "Server error"
@@ -253,7 +243,6 @@ app.post("/api/login", async (req, res) => {
       password
     } = req.body;
 
-
     if (!identifier || !password) {
 
       return res.status(400).json({
@@ -263,10 +252,8 @@ app.post("/api/login", async (req, res) => {
 
     }
 
-
     const loginValue =
       identifier.trim();
-
 
     const result =
       await pool.query(
@@ -282,7 +269,6 @@ app.post("/api/login", async (req, res) => {
         ]
       );
 
-
     if (result.rows.length === 0) {
 
       return res.status(401).json({
@@ -292,17 +278,14 @@ app.post("/api/login", async (req, res) => {
 
     }
 
-
     const user =
       result.rows[0];
-
 
     const passwordCorrect =
       await bcrypt.compare(
         password,
         user.password
       );
-
 
     if (!passwordCorrect) {
 
@@ -312,7 +295,6 @@ app.post("/api/login", async (req, res) => {
       });
 
     }
-
 
     const token =
       jwt.sign(
@@ -327,7 +309,6 @@ app.post("/api/login", async (req, res) => {
         }
       );
 
-
     res.json({
 
       message:
@@ -337,7 +318,8 @@ app.post("/api/login", async (req, res) => {
 
       user: {
 
-        id: user.id,
+        id:
+          user.id,
 
         fullName:
           user.full_name,
@@ -355,14 +337,12 @@ app.post("/api/login", async (req, res) => {
 
     });
 
-
   } catch (error) {
 
     console.error(
       "Login error:",
       error
     );
-
 
     res.status(500).json({
       message: "Server error"
@@ -382,7 +362,6 @@ function authenticateToken(req, res, next) {
   const authHeader =
     req.headers.authorization;
 
-
   if (!authHeader) {
 
     return res.status(401).json({
@@ -392,10 +371,8 @@ function authenticateToken(req, res, next) {
 
   }
 
-
   const parts =
     authHeader.split(" ");
-
 
   if (
     parts.length !== 2 ||
@@ -409,10 +386,8 @@ function authenticateToken(req, res, next) {
 
   }
 
-
   const token =
     parts[1];
-
 
   try {
 
@@ -422,13 +397,10 @@ function authenticateToken(req, res, next) {
         JWT_SECRET
       );
 
-
     req.user =
       decoded;
 
-
     next();
-
 
   } catch (error) {
 
@@ -471,7 +443,6 @@ app.get(
           ]
         );
 
-
       if (result.rows.length === 0) {
 
         return res.status(404).json({
@@ -481,10 +452,8 @@ app.get(
 
       }
 
-
       const user =
         result.rows[0];
-
 
       res.json({
 
@@ -509,14 +478,12 @@ app.get(
 
       });
 
-
     } catch (error) {
 
       console.error(
         "Get user error:",
         error
       );
-
 
       res.status(500).json({
         message:
@@ -545,7 +512,6 @@ app.post(
         phone
       } = req.body;
 
-
       if (!PAYLOR_API_KEY) {
 
         console.error(
@@ -559,10 +525,8 @@ app.post(
 
       }
 
-
       const depositAmount =
         Number(amount);
-
 
       if (
         !Number.isFinite(
@@ -578,12 +542,10 @@ app.post(
 
       }
 
-
       let normalizedPhone =
         String(phone || "")
           .trim()
           .replace(/\s+/g, "");
-
 
       if (
         normalizedPhone.startsWith("+254")
@@ -603,7 +565,6 @@ app.post(
 
       }
 
-
       if (
         !/^254[17]\d{8}$/.test(
           normalizedPhone
@@ -617,7 +578,6 @@ app.post(
 
       }
 
-
       const reference =
         "FORTIVA-" +
         Date.now() +
@@ -627,10 +587,8 @@ app.post(
           .toString("hex")
           .toUpperCase();
 
-
       const depositId =
         crypto.randomUUID();
-
 
       await pool.query(
         `
@@ -655,7 +613,6 @@ app.post(
         ]
       );
 
-
       const paylorBody = {
 
         phone:
@@ -674,14 +631,12 @@ app.post(
 
       };
 
-
       if (PAYLOR_CHANNEL_ID) {
 
         paylorBody.channelId =
           PAYLOR_CHANNEL_ID;
 
       }
-
 
       console.log(
         "Sending Paylor STK Push:",
@@ -695,7 +650,6 @@ app.post(
           reference
         }
       );
-
 
       const paylorResponse =
         await fetch(
@@ -726,19 +680,16 @@ app.post(
           }
         );
 
-
       const paylorData =
         await paylorResponse
           .json()
           .catch(() => ({}));
-
 
       console.log(
         "Paylor response:",
         paylorResponse.status,
         paylorData
       );
-
 
       if (!paylorResponse.ok) {
 
@@ -754,7 +705,6 @@ app.post(
             depositId
           ]
         );
-
 
         return res.status(
           paylorResponse.status
@@ -776,17 +726,14 @@ app.post(
 
       }
 
-
       const gatewayTransactionId =
         paylorData.transactionId ||
         paylorData.id ||
         null;
 
-
       const gatewayStatus =
         paylorData.status ||
         "SENT";
-
 
       await pool.query(
         `
@@ -801,7 +748,6 @@ app.post(
           depositId
         ]
       );
-
 
       return res.json({
 
@@ -818,14 +764,12 @@ app.post(
 
       });
 
-
     } catch (error) {
 
       console.error(
         "Deposit error:",
         error
       );
-
 
       res.status(500).json({
         message:
@@ -848,10 +792,8 @@ app.post(
 
     try {
 
-      const signature =
-        req.headers[
-          "x-webhook-signature"
-        ];
+      const receivedSignature =
+        req.headers["x-webhook-signature"];
 
 
       if (!PAYLOR_WEBHOOK_SECRET) {
@@ -868,7 +810,11 @@ app.post(
       }
 
 
-      if (!signature) {
+      if (!receivedSignature) {
+
+        console.error(
+          "Paylor callback received without signature"
+        );
 
         return res.status(401).json({
           message:
@@ -878,16 +824,61 @@ app.post(
       }
 
 
+      if (!req.rawBody) {
+
+        console.error(
+          "Paylor callback raw body is missing"
+        );
+
+        return res.status(400).json({
+          message:
+            "Webhook raw body is missing"
+        });
+
+      }
+
+
+      // Paylor signs the exact raw request body
       const expectedSignature =
         crypto
           .createHmac(
             "sha256",
-            PAYLOR_WEBHOOK_SECRET
+            PAYLOR_WEBHOOK_SECRET.trim()
           )
-          .update(
-            req.rawBody
-          )
+          .update(req.rawBody)
           .digest("hex");
+
+
+      // Normalize received signature
+      let signature =
+        String(receivedSignature)
+          .trim()
+          .toLowerCase();
+
+
+      // Support:
+      // abc123...
+      // sha256=abc123...
+      if (
+        signature.startsWith("sha256=")
+      ) {
+
+        signature =
+          signature.substring(7);
+
+      }
+
+
+      console.log(
+        "Paylor webhook signature check:",
+        {
+          receivedLength:
+            signature.length,
+
+          expectedLength:
+            expectedSignature.length
+        }
+      );
 
 
       const signatureBuffer =
@@ -925,6 +916,11 @@ app.post(
       }
 
 
+      console.log(
+        "Paylor webhook signature verified successfully"
+      );
+
+
       const {
         event,
         transaction
@@ -949,6 +945,19 @@ app.post(
 
       const reference =
         transaction.reference;
+
+
+      if (!reference) {
+
+        console.warn(
+          "Paylor callback has no transaction reference"
+        );
+
+        return res.json({
+          received: true
+        });
+
+      }
 
 
       const depositResult =
@@ -994,7 +1003,6 @@ app.post(
         transaction.status === "COMPLETED"
       ) {
 
-        // Prevent adding the same deposit twice
         if (
           deposit.status !== "COMPLETED"
         ) {
@@ -1009,49 +1017,102 @@ app.post(
             );
 
 
-            await client.query(
-              `
-              UPDATE deposits
-              SET status = $1,
-                  provider_ref = $2,
-                  mpesa_receipt = $3,
-                  completed_at = CURRENT_TIMESTAMP
-              WHERE id = $4
-              `,
-              [
-                "COMPLETED",
-
-                transaction.providerRef ||
-                  null,
-
-                transaction.mpesaReceipt ||
-                  null,
-
-                deposit.id
-              ]
-            );
+            // Re-check inside the transaction
+            const lockedDeposit =
+              await client.query(
+                `
+                SELECT *
+                FROM deposits
+                WHERE id = $1
+                FOR UPDATE
+                `,
+                [
+                  deposit.id
+                ]
+              );
 
 
-            await client.query(
-              `
-              UPDATE users
-              SET balance = balance + $1
-              WHERE id = $2
-              `,
-              [
-                Number(deposit.amount),
-                deposit.user_id
-              ]
-            );
+            if (
+              lockedDeposit.rows.length === 0
+            ) {
+
+              await client.query(
+                "ROLLBACK"
+              );
+
+              return res.json({
+                received: true
+              });
+
+            }
+
+
+            const currentDeposit =
+              lockedDeposit.rows[0];
+
+
+            if (
+              currentDeposit.status !==
+              "COMPLETED"
+            ) {
+
+              await client.query(
+                `
+                UPDATE deposits
+                SET status = $1,
+                    provider_ref = $2,
+                    mpesa_receipt = $3,
+                    completed_at = CURRENT_TIMESTAMP
+                WHERE id = $4
+                `,
+                [
+                  "COMPLETED",
+
+                  transaction.providerRef ||
+                    transaction.provider_ref ||
+                    null,
+
+                  transaction.mpesaReceipt ||
+                    transaction.mpesa_receipt ||
+                    transaction.metadata?.mpesaReceipt ||
+                    null,
+
+                  currentDeposit.id
+                ]
+              );
+
+
+              await client.query(
+                `
+                UPDATE users
+                SET balance = balance + $1
+                WHERE id = $2
+                `,
+                [
+                  Number(
+                    currentDeposit.amount
+                  ),
+
+                  currentDeposit.user_id
+                ]
+              );
+
+
+              console.log(
+                `Deposit completed: ${currentDeposit.reference} KES ${currentDeposit.amount}`
+              );
+
+            } else {
+
+              console.log(
+                `Deposit already completed: ${currentDeposit.reference}`
+              );
+
+            }
 
 
             await client.query(
               "COMMIT"
-            );
-
-
-            console.log(
-              `Deposit completed: ${deposit.reference} KES ${deposit.amount}`
             );
 
 
@@ -1068,6 +1129,12 @@ app.post(
             client.release();
 
           }
+
+        } else {
+
+          console.log(
+            `Deposit already completed: ${deposit.reference}`
+          );
 
         }
 
@@ -1089,11 +1156,17 @@ app.post(
           SET status = $1,
               failed_at = CURRENT_TIMESTAMP
           WHERE id = $2
+            AND status <> 'COMPLETED'
           `,
           [
             "FAILED",
             deposit.id
           ]
+        );
+
+
+        console.log(
+          `Deposit failed: ${deposit.reference}`
         );
 
       }
