@@ -51,9 +51,8 @@ const pool = new Pool({
 
 app.use(cors());
 
-// IMPORTANT:
-// Paylor callback MUST receive the original raw body
-// so the webhook signature can be verified correctly.
+// Paylor callback needs the original raw body
+// for webhook signature verification.
 app.use(
   "/api/paylor-callback",
   express.raw({
@@ -61,7 +60,7 @@ app.use(
   })
 );
 
-// Normal JSON for all other routes
+// Normal JSON for other routes.
 app.use(express.json());
 
 // ======================================================
@@ -96,6 +95,39 @@ async function setupDatabase() {
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         completed_at TIMESTAMP,
         failed_at TIMESTAMP
+      )
+    `);
+
+    // ==================================================
+    // WITHDRAWALS
+    // ==================================================
+
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS withdrawals (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL REFERENCES users(id),
+        amount NUMERIC(12,2) NOT NULL,
+        phone TEXT NOT NULL,
+        reference TEXT UNIQUE NOT NULL,
+        status TEXT NOT NULL DEFAULT 'PENDING',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        completed_at TIMESTAMP,
+        failed_at TIMESTAMP
+      )
+    `);
+
+    // ==================================================
+    // INVESTMENTS
+    // ==================================================
+
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS investments (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL REFERENCES users(id),
+        amount NUMERIC(12,2) NOT NULL,
+        reference TEXT UNIQUE NOT NULL,
+        status TEXT NOT NULL DEFAULT 'ACTIVE',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       )
     `);
 
@@ -491,8 +523,7 @@ app.get(
 );
 
 // ======================================================
-// HELPER:
-// COMPLETE A DEPOSIT AND CREDIT THE USER
+// COMPLETE A DEPOSIT
 // ======================================================
 
 async function completeDeposit(
@@ -509,9 +540,6 @@ async function completeDeposit(
       "BEGIN"
     );
 
-    // Lock this deposit so the
-    // webhook and status checker
-    // cannot credit it twice.
     const lockedDeposit =
       await client.query(
         `
@@ -537,8 +565,6 @@ async function completeDeposit(
     const currentDeposit =
       lockedDeposit.rows[0];
 
-    // Already completed:
-    // DO NOT credit again.
     if (
       currentDeposit.status ===
       "COMPLETED"
@@ -617,40 +643,9 @@ async function completeDeposit(
     );
 
     console.log(
-      "================================="
-    );
-
-    console.log(
-      "DEPOSIT COMPLETED"
-    );
-
-    console.log(
-      "Reference:",
-      currentDeposit.reference
-    );
-
-    console.log(
-      "Amount:",
+      "DEPOSIT COMPLETED:",
+      currentDeposit.reference,
       currentDeposit.amount
-    );
-
-    console.log(
-      "User:",
-      currentDeposit.user_id
-    );
-
-    console.log(
-      "Provider Ref:",
-      providerRef
-    );
-
-    console.log(
-      "M-Pesa Receipt:",
-      mpesaReceipt
-    );
-
-    console.log(
-      "================================="
     );
 
     return true;
@@ -686,7 +681,7 @@ app.post(
       } = req.body;
 
       console.log(
-        "DEPOSIT REQUEST FROM FRONTEND:",
+        "DEPOSIT REQUEST:",
         {
           amount,
           phone,
@@ -696,10 +691,6 @@ app.post(
       );
 
       if (!PAYLOR_API_KEY) {
-
-        console.error(
-          "PAYLOR_API_KEY is missing"
-        );
 
         return res.status(500).json({
           message:
@@ -766,8 +757,6 @@ app.post(
       const depositId =
         crypto.randomUUID();
 
-      // Save the deposit BEFORE
-      // sending the STK request.
       await pool.query(
         `
         INSERT INTO deposits
@@ -819,36 +808,6 @@ app.post(
           PAYLOR_CHANNEL_ID;
       }
 
-      console.log("");
-      console.log(
-        "================================="
-      );
-      console.log(
-        "       PAYLOR STK PUSH"
-      );
-      console.log(
-        "================================="
-      );
-      console.log(
-        "Phone:",
-        phone
-      );
-      console.log(
-        "Amount:",
-        depositAmount
-      );
-      console.log(
-        "Reference:",
-        reference
-      );
-      console.log(
-        "Callback:",
-        callbackUrl
-      );
-      console.log(
-        "================================="
-      );
-
       const response =
         await fetch(
           `${PAYLOR_BASE_URL}/merchants/payments/stk-push`,
@@ -881,15 +840,6 @@ app.post(
           .json()
           .catch(() => ({}));
 
-      console.log("");
-      console.log(
-        "===== PAYLOR RESPONSE ====="
-      );
-      console.log(
-        response.status,
-        responseData
-      );
-
       if (!response.ok) {
 
         await pool.query(
@@ -917,11 +867,6 @@ app.post(
             responseData?.error?.message ||
             responseData?.message ||
             "Paylor could not initiate the STK Push",
-
-          error:
-            responseData?.error?.code ||
-            responseData?.error ||
-            null,
 
           reference:
             reference
@@ -1033,29 +978,7 @@ app.post(
           "x-webhook-signature"
         ];
 
-      console.log("");
-      console.log(
-        "================================="
-      );
-      console.log(
-        "       PAYLOR WEBHOOK"
-      );
-      console.log(
-        "================================="
-      );
-
-      console.log(
-        "Webhook signature:",
-        signature
-          ? "[received]"
-          : "[missing]"
-      );
-
       if (!PAYLOR_WEBHOOK_SECRET) {
-
-        console.error(
-          "PAYLOR_WEBHOOK_SECRET is missing"
-        );
 
         return res.status(500).json({
           success: false,
@@ -1065,10 +988,6 @@ app.post(
       }
 
       if (!signature) {
-
-        console.error(
-          "Paylor webhook: missing signature"
-        );
 
         return res.status(401).json({
           success: false,
@@ -1086,13 +1005,6 @@ app.post(
               )
             );
 
-      console.log(
-        "Raw webhook body:",
-        rawBody.toString("utf8")
-      );
-
-      // Same signature method as the
-      // working Paylor integration.
       const expectedSignature =
         crypto
           .createHmac(
@@ -1107,8 +1019,6 @@ app.post(
           .trim()
           .toLowerCase();
 
-      // Some webhook systems prefix
-      // the signature with sha256=.
       if (
         receivedSignature.startsWith(
           "sha256="
@@ -1120,16 +1030,6 @@ app.post(
             7
           );
       }
-
-      console.log(
-        "Received signature length:",
-        receivedSignature.length
-      );
-
-      console.log(
-        "Expected signature length:",
-        expectedSignature.length
-      );
 
       const receivedBuffer =
         Buffer.from(
@@ -1148,10 +1048,6 @@ app.post(
         expectedBuffer.length
       ) {
 
-        console.error(
-          "Paylor webhook: invalid signature"
-        );
-
         return res.status(401).json({
           success: false,
           message:
@@ -1166,20 +1062,12 @@ app.post(
         )
       ) {
 
-        console.error(
-          "Paylor webhook: invalid signature"
-        );
-
         return res.status(401).json({
           success: false,
           message:
             "Invalid signature"
         });
       }
-
-      console.log(
-        "Paylor webhook signature verified successfully"
-      );
 
       let payment;
 
@@ -1192,26 +1080,12 @@ app.post(
 
       } catch (error) {
 
-        console.error(
-          "Invalid webhook JSON:",
-          error.message
-        );
-
         return res.status(400).json({
           success: false,
           message:
             "Invalid webhook JSON"
         });
       }
-
-      console.log(
-        "Webhook payment:",
-        payment
-      );
-
-      // ==================================================
-      // FIND TRANSACTION
-      // ==================================================
 
       const transaction =
         payment?.transaction ||
@@ -1237,26 +1111,7 @@ app.post(
           ""
         ).toUpperCase();
 
-      console.log(
-        "Webhook transaction ID:",
-        transactionId
-      );
-
-      console.log(
-        "Webhook reference:",
-        reference
-      );
-
-      console.log(
-        "Webhook status:",
-        paymentStatus
-      );
-
       if (!reference) {
-
-        console.warn(
-          "Paylor webhook has no reference"
-        );
 
         return res.status(200).json({
           success: true,
@@ -1279,11 +1134,6 @@ app.post(
         depositResult.rows.length === 0
       ) {
 
-        console.warn(
-          "Deposit not found:",
-          reference
-        );
-
         return res.status(200).json({
           success: true,
           received: true
@@ -1292,10 +1142,6 @@ app.post(
 
       const deposit =
         depositResult.rows[0];
-
-      // ==================================================
-      // SUCCESS
-      // ==================================================
 
       if (
         paymentStatus ===
@@ -1314,10 +1160,6 @@ app.post(
           }
         );
       }
-
-      // ==================================================
-      // FAILED / CANCELLED
-      // ==================================================
 
       if (
         paymentStatus ===
@@ -1343,16 +1185,7 @@ app.post(
             deposit.id
           ]
         );
-
-        console.log(
-          "Deposit marked failed:",
-          reference
-        );
       }
-
-      console.log(
-        "================================="
-      );
 
       return res.status(200).json({
         success: true,
@@ -1384,11 +1217,6 @@ app.post(
   authenticateToken,
   async (req, res) => {
 
-    console.log(
-      "PAYMENT STATUS REQUEST:",
-      req.body
-    );
-
     try {
 
       const transactionId =
@@ -1397,11 +1225,6 @@ app.post(
         req.body?.transaction_id ||
         req.query?.transactionId ||
         req.query?.checkout_request_id;
-
-      console.log(
-        "RESOLVED TRANSACTION ID:",
-        transactionId
-      );
 
       if (!transactionId) {
 
@@ -1442,16 +1265,6 @@ app.post(
           .json()
           .catch(() => ({}));
 
-      console.log("");
-      console.log(
-        "===== PAYLOR PAYMENT STATUS ====="
-      );
-
-      console.log(
-        response.status,
-        responseData
-      );
-
       if (!response.ok) {
 
         return res.status(
@@ -1481,15 +1294,6 @@ app.post(
           responseData?.status ||
           ""
         ).toUpperCase();
-
-      console.log(
-        "NORMALIZED PAYMENT STATUS:",
-        paymentStatus
-      );
-
-      // ==================================================
-      // RECONCILE DATABASE
-      // ==================================================
 
       const depositResult =
         await pool.query(
@@ -1566,14 +1370,10 @@ app.post(
 
       console.error(
         "Payment status error:",
-        error.response?.data ||
-        error.message ||
         error
       );
 
-      return res.status(
-        500
-      ).json({
+      return res.status(500).json({
 
         success: false,
 
@@ -1583,6 +1383,774 @@ app.post(
         data:
           null
 
+      });
+    }
+  }
+);
+
+// ======================================================
+// WITHDRAW FUNDS
+// ======================================================
+//
+// This creates a withdrawal request and deducts the
+// requested amount from the available balance.
+//
+// Actual M-Pesa payout requires a configured payout
+// provider. The endpoint therefore returns PENDING.
+// ======================================================
+
+app.post(
+  "/api/withdraw",
+  authenticateToken,
+  async (req, res) => {
+
+    const client =
+      await pool.connect();
+
+    try {
+
+      let {
+        amount,
+        phone
+      } = req.body;
+
+      const withdrawalAmount =
+        Number(amount);
+
+      if (
+        !Number.isFinite(
+          withdrawalAmount
+        ) ||
+        withdrawalAmount <= 0
+      ) {
+
+        return res.status(400).json({
+          success: false,
+          message:
+            "Enter a valid withdrawal amount"
+        });
+      }
+
+      phone =
+        String(phone || "")
+          .trim()
+          .replace(/\s+/g, "");
+
+      if (
+        phone.startsWith("+254")
+      ) {
+
+        phone =
+          phone.substring(1);
+
+      } else if (
+        phone.startsWith("07") ||
+        phone.startsWith("01")
+      ) {
+
+        phone =
+          "254" +
+          phone.substring(1);
+      }
+
+      if (
+        !/^254[17]\d{8}$/.test(phone)
+      ) {
+
+        return res.status(400).json({
+          success: false,
+          message:
+            "Enter a valid Kenyan M-Pesa phone number"
+        });
+      }
+
+      await client.query(
+        "BEGIN"
+      );
+
+      // Lock the user row so two simultaneous
+      // withdrawals cannot spend the same balance.
+      const userResult =
+        await client.query(
+          `
+          SELECT
+            id,
+            balance
+          FROM users
+          WHERE id = $1
+          FOR UPDATE
+          `,
+          [req.user.id]
+        );
+
+      if (
+        userResult.rows.length === 0
+      ) {
+
+        await client.query(
+          "ROLLBACK"
+        );
+
+        return res.status(404).json({
+          success: false,
+          message:
+            "User not found"
+        });
+      }
+
+      const currentBalance =
+        Number(
+          userResult.rows[0].balance || 0
+        );
+
+      if (
+        withdrawalAmount >
+        currentBalance
+      ) {
+
+        await client.query(
+          "ROLLBACK"
+        );
+
+        return res.status(400).json({
+          success: false,
+          message:
+            "Insufficient available balance",
+          balance:
+            currentBalance
+        });
+      }
+
+      const reference =
+        "WDR-" +
+        Date.now() +
+        "-" +
+        Math.floor(
+          Math.random() * 10000
+        );
+
+      const withdrawalId =
+        crypto.randomUUID();
+
+      // Deduct the balance atomically.
+      await client.query(
+        `
+        UPDATE users
+        SET balance =
+          balance - $1
+        WHERE id = $2
+        `,
+        [
+          withdrawalAmount,
+          req.user.id
+        ]
+      );
+
+      await client.query(
+        `
+        INSERT INTO withdrawals
+        (
+          id,
+          user_id,
+          amount,
+          phone,
+          reference,
+          status
+        )
+        VALUES
+        ($1, $2, $3, $4, $5, $6)
+        `,
+        [
+          withdrawalId,
+          req.user.id,
+          withdrawalAmount,
+          phone,
+          reference,
+          "PENDING"
+        ]
+      );
+
+      await client.query(
+        "COMMIT"
+      );
+
+      console.log(
+        "WITHDRAWAL REQUEST CREATED:",
+        {
+          reference,
+          amount:
+            withdrawalAmount,
+          phone,
+          userId:
+            req.user.id
+        }
+      );
+
+      return res.json({
+
+        success: true,
+
+        message:
+          "Withdrawal request submitted",
+
+        withdrawalId:
+          withdrawalId,
+
+        reference:
+          reference,
+
+        amount:
+          withdrawalAmount,
+
+        phone:
+          phone,
+
+        status:
+          "PENDING",
+
+        balance:
+          currentBalance -
+          withdrawalAmount
+
+      });
+
+    } catch (error) {
+
+      try {
+        await client.query(
+          "ROLLBACK"
+        );
+      } catch (_) {}
+
+      console.error(
+        "Withdrawal error:",
+        error
+      );
+
+      return res.status(500).json({
+        success: false,
+        message:
+          "Unable to process withdrawal"
+      });
+
+    } finally {
+
+      client.release();
+    }
+  }
+);
+
+// ======================================================
+// GET WITHDRAWAL HISTORY
+// ======================================================
+
+app.get(
+  "/api/withdrawals",
+  authenticateToken,
+  async (req, res) => {
+
+    try {
+
+      const result =
+        await pool.query(
+          `
+          SELECT
+            id,
+            amount,
+            phone,
+            reference,
+            status,
+            created_at,
+            completed_at,
+            failed_at
+          FROM withdrawals
+          WHERE user_id = $1
+          ORDER BY created_at DESC
+          `,
+          [req.user.id]
+        );
+
+      return res.json({
+
+        success: true,
+
+        withdrawals:
+          result.rows.map(
+            (item) => ({
+
+              id:
+                item.id,
+
+              amount:
+                Number(
+                  item.amount
+                ),
+
+              phone:
+                item.phone,
+
+              reference:
+                item.reference,
+
+              status:
+                item.status,
+
+              createdAt:
+                item.created_at,
+
+              completedAt:
+                item.completed_at,
+
+              failedAt:
+                item.failed_at
+
+            })
+          )
+
+      });
+
+    } catch (error) {
+
+      console.error(
+        "Withdrawal history error:",
+        error
+      );
+
+      return res.status(500).json({
+        success: false,
+        message:
+          "Unable to load withdrawal history"
+      });
+    }
+  }
+);
+
+// ======================================================
+// INVEST FUNDS
+// ======================================================
+//
+// Investment moves money from the available balance
+// into an ACTIVE investment record.
+// ======================================================
+
+app.post(
+  "/api/invest",
+  authenticateToken,
+  async (req, res) => {
+
+    const client =
+      await pool.connect();
+
+    try {
+
+      const investmentAmount =
+        Number(
+          req.body?.amount
+        );
+
+      if (
+        !Number.isFinite(
+          investmentAmount
+        ) ||
+        investmentAmount <= 0
+      ) {
+
+        return res.status(400).json({
+          success: false,
+          message:
+            "Enter a valid investment amount"
+        });
+      }
+
+      await client.query(
+        "BEGIN"
+      );
+
+      const userResult =
+        await client.query(
+          `
+          SELECT
+            id,
+            balance
+          FROM users
+          WHERE id = $1
+          FOR UPDATE
+          `,
+          [req.user.id]
+        );
+
+      if (
+        userResult.rows.length === 0
+      ) {
+
+        await client.query(
+          "ROLLBACK"
+        );
+
+        return res.status(404).json({
+          success: false,
+          message:
+            "User not found"
+        });
+      }
+
+      const currentBalance =
+        Number(
+          userResult.rows[0].balance || 0
+        );
+
+      if (
+        investmentAmount >
+        currentBalance
+      ) {
+
+        await client.query(
+          "ROLLBACK"
+        );
+
+        return res.status(400).json({
+          success: false,
+          message:
+            "Insufficient available balance",
+          balance:
+            currentBalance
+        });
+      }
+
+      const reference =
+        "INV-" +
+        Date.now() +
+        "-" +
+        Math.floor(
+          Math.random() * 10000
+        );
+
+      const investmentId =
+        crypto.randomUUID();
+
+      await client.query(
+        `
+        UPDATE users
+        SET balance =
+          balance - $1
+        WHERE id = $2
+        `,
+        [
+          investmentAmount,
+          req.user.id
+        ]
+      );
+
+      await client.query(
+        `
+        INSERT INTO investments
+        (
+          id,
+          user_id,
+          amount,
+          reference,
+          status
+        )
+        VALUES
+        ($1, $2, $3, $4, $5)
+        `,
+        [
+          investmentId,
+          req.user.id,
+          investmentAmount,
+          reference,
+          "ACTIVE"
+        ]
+      );
+
+      await client.query(
+        "COMMIT"
+      );
+
+      const newBalance =
+        currentBalance -
+        investmentAmount;
+
+      console.log(
+        "INVESTMENT CREATED:",
+        {
+          reference,
+          amount:
+            investmentAmount,
+          userId:
+            req.user.id
+        }
+      );
+
+      return res.json({
+
+        success: true,
+
+        message:
+          "Investment created successfully",
+
+        investmentId:
+          investmentId,
+
+        reference:
+          reference,
+
+        amount:
+          investmentAmount,
+
+        status:
+          "ACTIVE",
+
+        balance:
+          newBalance
+
+      });
+
+    } catch (error) {
+
+      try {
+        await client.query(
+          "ROLLBACK"
+        );
+      } catch (_) {}
+
+      console.error(
+        "Investment error:",
+        error
+      );
+
+      return res.status(500).json({
+        success: false,
+        message:
+          "Unable to create investment"
+      });
+
+    } finally {
+
+      client.release();
+    }
+  }
+);
+
+// ======================================================
+// GET INVESTMENT HISTORY
+// ======================================================
+
+app.get(
+  "/api/investments",
+  authenticateToken,
+  async (req, res) => {
+
+    try {
+
+      const result =
+        await pool.query(
+          `
+          SELECT
+            id,
+            amount,
+            reference,
+            status,
+            created_at
+          FROM investments
+          WHERE user_id = $1
+          ORDER BY created_at DESC
+          `,
+          [req.user.id]
+        );
+
+      return res.json({
+
+        success: true,
+
+        investments:
+          result.rows.map(
+            (item) => ({
+
+              id:
+                item.id,
+
+              amount:
+                Number(
+                  item.amount
+                ),
+
+              reference:
+                item.reference,
+
+              status:
+                item.status,
+
+              createdAt:
+                item.created_at
+
+            })
+          )
+
+      });
+
+    } catch (error) {
+
+      console.error(
+        "Investment history error:",
+        error
+      );
+
+      return res.status(500).json({
+        success: false,
+        message:
+          "Unable to load investment history"
+      });
+    }
+  }
+);
+
+// ======================================================
+// GET ALL TRANSACTIONS
+// ======================================================
+
+app.get(
+  "/api/transactions",
+  authenticateToken,
+  async (req, res) => {
+
+    try {
+
+      const deposits =
+        await pool.query(
+          `
+          SELECT
+            amount,
+            reference,
+            status,
+            created_at
+          FROM deposits
+          WHERE user_id = $1
+          `,
+          [req.user.id]
+        );
+
+      const withdrawals =
+        await pool.query(
+          `
+          SELECT
+            amount,
+            reference,
+            status,
+            created_at
+          FROM withdrawals
+          WHERE user_id = $1
+          `,
+          [req.user.id]
+        );
+
+      const investments =
+        await pool.query(
+          `
+          SELECT
+            amount,
+            reference,
+            status,
+            created_at
+          FROM investments
+          WHERE user_id = $1
+          `,
+          [req.user.id]
+        );
+
+      const transactions = [
+
+        ...deposits.rows.map(
+          (item) => ({
+            type:
+              "DEPOSIT",
+
+            amount:
+              Number(
+                item.amount
+              ),
+
+            reference:
+              item.reference,
+
+            status:
+              item.status,
+
+            createdAt:
+              item.created_at
+          })
+        ),
+
+        ...withdrawals.rows.map(
+          (item) => ({
+            type:
+              "WITHDRAWAL",
+
+            amount:
+              Number(
+                item.amount
+              ),
+
+            reference:
+              item.reference,
+
+            status:
+              item.status,
+
+            createdAt:
+              item.created_at
+          })
+        ),
+
+        ...investments.rows.map(
+          (item) => ({
+            type:
+              "INVESTMENT",
+
+            amount:
+              Number(
+                item.amount
+              ),
+
+            reference:
+              item.reference,
+
+            status:
+              item.status,
+
+            createdAt:
+              item.created_at
+          })
+        )
+
+      ];
+
+      transactions.sort(
+        (a, b) =>
+          new Date(b.createdAt) -
+          new Date(a.createdAt)
+      );
+
+      return res.json({
+
+        success: true,
+
+        transactions:
+          transactions
+
+      });
+
+    } catch (error) {
+
+      console.error(
+        "Transactions error:",
+        error
+      );
+
+      return res.status(500).json({
+        success: false,
+        message:
+          "Unable to load transactions"
       });
     }
   }
@@ -1700,6 +2268,26 @@ app.get(
 
       database:
         "PostgreSQL",
+
+      features: {
+        login:
+          true,
+
+        registration:
+          true,
+
+        deposits:
+          true,
+
+        withdrawals:
+          true,
+
+        investments:
+          true,
+
+        transactions:
+          true
+      },
 
       status:
         "online"
