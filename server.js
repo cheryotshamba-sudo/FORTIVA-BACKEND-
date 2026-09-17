@@ -55,8 +55,6 @@ pool.on("error", (err) => {
 
 app.use(cors());
 
-// IMPORTANT:
-// Keep raw body for Paylor webhook signature verification.
 app.use(
   "/api/paylor-callback",
   express.raw({
@@ -117,7 +115,6 @@ async function setupDatabase() {
       )
     `);
 
-    // Add Paylor tracking columns to existing withdrawals table.
     await client.query(`
       ALTER TABLE withdrawals
       ADD COLUMN IF NOT EXISTS gateway_transaction_id TEXT
@@ -535,7 +532,6 @@ async function completeDeposit(deposit, payment) {
 
     const currentDeposit = lockedDeposit.rows[0];
 
-    // Prevent double-crediting.
     if (currentDeposit.status === "COMPLETED") {
       await client.query("COMMIT");
       return;
@@ -756,7 +752,6 @@ app.post("/api/deposit", authenticateToken, async (req, res) => {
 
 // ======================================================
 // PAYLOR CALLBACK
-// Handles BOTH deposits and withdrawals.
 // ======================================================
 
 app.post("/api/paylor-callback", async (req, res) => {
@@ -927,8 +922,6 @@ app.post("/api/paylor-callback", async (req, res) => {
         }
 
         if (isFailed) {
-          // Refund only if this withdrawal has not already
-          // been completed or refunded.
           if (
             withdrawal.status !== "FAILED" &&
             withdrawal.status !== "COMPLETED"
@@ -1348,7 +1341,6 @@ app.post(
       amount = Number(req.body.amount);
       const phone = req.body.phone;
 
-      // Paylor B2C limits from the API documentation.
       if (
         !Number.isFinite(amount) ||
         amount < 10 ||
@@ -1379,12 +1371,6 @@ app.post(
             "Paylor API key is not configured",
         });
       }
-
-      // --------------------------------------------------
-      // Reserve/deduct balance first.
-      // This prevents another withdrawal from spending
-      // the same balance while Paylor is being contacted.
-      // --------------------------------------------------
 
       await client.query("BEGIN");
 
@@ -1461,6 +1447,7 @@ app.post(
 
       // --------------------------------------------------
       // Send B2C request to Paylor.
+      // commandId removed for testing.
       // --------------------------------------------------
 
       let response;
@@ -1479,9 +1466,7 @@ app.post(
               phone: normalizedPhone,
               amount,
               reference,
-              remarks:
-                "Fortiva Capital withdrawal",
-              commandId: "BusinessPayment",
+              remarks: "Fortiva Capital withdrawal",
               callbackUrl:
                 `${BACKEND_URL}/api/paylor-callback`,
             }),
@@ -1522,11 +1507,6 @@ app.post(
         data.status || ""
       ).toUpperCase();
 
-      // --------------------------------------------------
-      // Paylor rejected the payout.
-      // Refund immediately.
-      // --------------------------------------------------
-
       if (
         !response.ok ||
         !gatewayTransactionId
@@ -1545,11 +1525,6 @@ app.post(
           reference,
         });
       }
-
-      // --------------------------------------------------
-      // Paylor accepted/queued the payout.
-      // Keep withdrawal PENDING until callback confirms.
-      // --------------------------------------------------
 
       await pool.query(
         `
@@ -1605,8 +1580,6 @@ app.post(
         error
       );
 
-      // If money was already deducted and the
-      // withdrawal was created, attempt a refund.
       if (withdrawalId) {
         try {
           await refundFailedWithdrawal(
@@ -1665,7 +1638,6 @@ async function refundFailedWithdrawal(
     const withdrawal =
       withdrawalResult.rows[0];
 
-    // Never refund a completed withdrawal.
     if (
       withdrawal.status === "COMPLETED" ||
       withdrawal.refunded_at
@@ -1788,7 +1760,8 @@ app.get(
             createdAt: row.created_at,
             completedAt:
               row.completed_at,
-            failedAt: row.failed_at,
+            failedAt:
+              row.failed_at,
           })
         ),
       });
@@ -2139,7 +2112,8 @@ app.get(
             createdAt: row.created_at,
             completedAt:
               row.completed_at,
-            failedAt: row.failed_at,
+            failedAt:
+              row.failed_at,
           })
         ),
       });
