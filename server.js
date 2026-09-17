@@ -3,6 +3,7 @@ const cors = require("cors");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const crypto = require("crypto");
+const { Pool } = require("pg");
 
 const app = express();
 
@@ -10,6 +11,8 @@ const PORT = process.env.PORT || 10000;
 
 const JWT_SECRET =
   process.env.JWT_SECRET || "fortiva-development-secret";
+
+const DATABASE_URL = process.env.DATABASE_URL;
 
 const PAYLOR_API_KEY = process.env.PAYLOR_API_KEY;
 const PAYLOR_CHANNEL_ID = process.env.PAYLOR_CHANNEL_ID;
@@ -21,6 +24,23 @@ const BACKEND_URL =
 
 const PAYLOR_BASE_URL =
   "https://api.paylorke.com/api/v1";
+
+
+// --------------------------------------------------
+// POSTGRESQL DATABASE
+// --------------------------------------------------
+
+if (!DATABASE_URL) {
+  console.error("DATABASE_URL is not configured");
+  process.exit(1);
+}
+
+const pool = new Pool({
+  connectionString: DATABASE_URL,
+  ssl: {
+    rejectUnauthorized: false
+  }
+});
 
 
 // --------------------------------------------------
@@ -39,11 +59,54 @@ app.use(
 
 
 // --------------------------------------------------
-// TEMPORARY IN-MEMORY STORAGE
+// DATABASE SETUP
 // --------------------------------------------------
 
-const users = [];
-const deposits = [];
+async function setupDatabase() {
+  try {
+
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS users (
+        id TEXT PRIMARY KEY,
+        full_name TEXT NOT NULL,
+        email TEXT UNIQUE NOT NULL,
+        phone TEXT UNIQUE NOT NULL,
+        password TEXT NOT NULL,
+        balance NUMERIC(12,2) DEFAULT 0,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS deposits (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL REFERENCES users(id),
+        amount NUMERIC(12,2) NOT NULL,
+        phone TEXT NOT NULL,
+        reference TEXT UNIQUE NOT NULL,
+        status TEXT NOT NULL DEFAULT 'PENDING',
+        gateway_transaction_id TEXT,
+        provider_ref TEXT,
+        mpesa_receipt TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        completed_at TIMESTAMP,
+        failed_at TIMESTAMP
+      )
+    `);
+
+    console.log("PostgreSQL database connected");
+    console.log("Database tables ready");
+
+  } catch (error) {
+
+    console.error(
+      "Database setup error:",
+      error
+    );
+
+    process.exit(1);
+  }
+}
 
 
 // --------------------------------------------------
@@ -51,9 +114,12 @@ const deposits = [];
 // --------------------------------------------------
 
 app.get("/", (req, res) => {
+
   res.json({
-    message: "Fortiva Capital backend is running"
+    message: "Fortiva Capital backend is running",
+    database: "connected"
   });
+
 });
 
 
@@ -62,7 +128,9 @@ app.get("/", (req, res) => {
 // --------------------------------------------------
 
 app.post("/api/register", async (req, res) => {
+
   try {
+
     const {
       fullName,
       email,
@@ -70,43 +138,90 @@ app.post("/api/register", async (req, res) => {
       password
     } = req.body;
 
+
     if (!fullName || !email || !phone || !password) {
+
       return res.status(400).json({
         message: "All fields are required"
       });
+
     }
 
-    const existingUser = users.find(
-      user =>
-        user.email.toLowerCase() === email.toLowerCase() ||
-        user.phone === phone
-    );
 
-    if (existingUser) {
+    const cleanEmail =
+      email.trim().toLowerCase();
+
+    const cleanPhone =
+      phone.trim();
+
+
+    const existingUser =
+      await pool.query(
+        `
+        SELECT id
+        FROM users
+        WHERE email = $1 OR phone = $2
+        LIMIT 1
+        `,
+        [
+          cleanEmail,
+          cleanPhone
+        ]
+      );
+
+
+    if (existingUser.rows.length > 0) {
+
       return res.status(409).json({
-        message: "Email or phone number already registered"
+        message:
+          "Email or phone number already registered"
       });
+
     }
 
-    const hashedPassword = await bcrypt.hash(
-      password,
-      10
+
+    const hashedPassword =
+      await bcrypt.hash(
+        password,
+        10
+      );
+
+
+    const userId =
+      crypto.randomUUID();
+
+
+    await pool.query(
+      `
+      INSERT INTO users
+      (
+        id,
+        full_name,
+        email,
+        phone,
+        password,
+        balance
+      )
+      VALUES ($1, $2, $3, $4, $5, $6)
+      `,
+      [
+        userId,
+        fullName.trim(),
+        cleanEmail,
+        cleanPhone,
+        hashedPassword,
+        0
+      ]
     );
 
-    const user = {
-      id: Date.now().toString(),
-      fullName,
-      email: email.toLowerCase(),
-      phone,
-      password: hashedPassword,
-      balance: 0
-    };
-
-    users.push(user);
 
     res.status(201).json({
-      message: "Account created successfully"
+
+      message:
+        "Account created successfully"
+
     });
+
 
   } catch (error) {
 
@@ -115,10 +230,13 @@ app.post("/api/register", async (req, res) => {
       error
     );
 
+
     res.status(500).json({
       message: "Server error"
     });
+
   }
+
 });
 
 
@@ -127,6 +245,7 @@ app.post("/api/register", async (req, res) => {
 // --------------------------------------------------
 
 app.post("/api/login", async (req, res) => {
+
   try {
 
     const {
@@ -134,29 +253,49 @@ app.post("/api/login", async (req, res) => {
       password
     } = req.body;
 
+
     if (!identifier || !password) {
+
       return res.status(400).json({
         message:
           "Phone number/email and password are required"
       });
+
     }
+
 
     const loginValue =
       identifier.trim();
 
-    const user = users.find(
-      user =>
-        user.email.toLowerCase() ===
-          loginValue.toLowerCase() ||
-        user.phone === loginValue
-    );
 
-    if (!user) {
+    const result =
+      await pool.query(
+        `
+        SELECT *
+        FROM users
+        WHERE LOWER(email) = LOWER($1)
+           OR phone = $1
+        LIMIT 1
+        `,
+        [
+          loginValue
+        ]
+      );
+
+
+    if (result.rows.length === 0) {
+
       return res.status(401).json({
         message:
           "Invalid phone number/email or password"
       });
+
     }
+
+
+    const user =
+      result.rows[0];
+
 
     const passwordCorrect =
       await bcrypt.compare(
@@ -164,38 +303,58 @@ app.post("/api/login", async (req, res) => {
         user.password
       );
 
+
     if (!passwordCorrect) {
+
       return res.status(401).json({
         message:
           "Invalid phone number/email or password"
       });
+
     }
 
-    const token = jwt.sign(
-      {
-        id: user.id,
-        email: user.email,
-        phone: user.phone
-      },
-      JWT_SECRET,
-      {
-        expiresIn: "7d"
-      }
-    );
+
+    const token =
+      jwt.sign(
+        {
+          id: user.id,
+          email: user.email,
+          phone: user.phone
+        },
+        JWT_SECRET,
+        {
+          expiresIn: "7d"
+        }
+      );
+
 
     res.json({
-      message: "Login successful",
+
+      message:
+        "Login successful",
 
       token,
 
       user: {
+
         id: user.id,
-        fullName: user.fullName,
-        email: user.email,
-        phone: user.phone,
-        balance: user.balance || 0
+
+        fullName:
+          user.full_name,
+
+        email:
+          user.email,
+
+        phone:
+          user.phone,
+
+        balance:
+          Number(user.balance || 0)
+
       }
+
     });
+
 
   } catch (error) {
 
@@ -204,10 +363,13 @@ app.post("/api/login", async (req, res) => {
       error
     );
 
+
     res.status(500).json({
       message: "Server error"
     });
+
   }
+
 });
 
 
@@ -220,25 +382,37 @@ function authenticateToken(req, res, next) {
   const authHeader =
     req.headers.authorization;
 
+
   if (!authHeader) {
+
     return res.status(401).json({
-      message: "Authentication required"
+      message:
+        "Authentication required"
     });
+
   }
+
 
   const parts =
     authHeader.split(" ");
+
 
   if (
     parts.length !== 2 ||
     parts[0] !== "Bearer"
   ) {
+
     return res.status(401).json({
-      message: "Invalid authorization header"
+      message:
+        "Invalid authorization header"
     });
+
   }
 
-  const token = parts[1];
+
+  const token =
+    parts[1];
+
 
   try {
 
@@ -248,16 +422,23 @@ function authenticateToken(req, res, next) {
         JWT_SECRET
       );
 
-    req.user = decoded;
+
+    req.user =
+      decoded;
+
 
     next();
+
 
   } catch (error) {
 
     return res.status(401).json({
-      message: "Invalid or expired token"
+      message:
+        "Invalid or expired token"
     });
+
   }
+
 }
 
 
@@ -268,29 +449,82 @@ function authenticateToken(req, res, next) {
 app.get(
   "/api/me",
   authenticateToken,
-  (req, res) => {
+  async (req, res) => {
 
-    const user =
-      users.find(
-        user =>
-          user.id === req.user.id
+    try {
+
+      const result =
+        await pool.query(
+          `
+          SELECT
+            id,
+            full_name,
+            email,
+            phone,
+            balance
+          FROM users
+          WHERE id = $1
+          LIMIT 1
+          `,
+          [
+            req.user.id
+          ]
+        );
+
+
+      if (result.rows.length === 0) {
+
+        return res.status(404).json({
+          message:
+            "User not found"
+        });
+
+      }
+
+
+      const user =
+        result.rows[0];
+
+
+      res.json({
+
+        user: {
+
+          id:
+            user.id,
+
+          fullName:
+            user.full_name,
+
+          email:
+            user.email,
+
+          phone:
+            user.phone,
+
+          balance:
+            Number(user.balance || 0)
+
+        }
+
+      });
+
+
+    } catch (error) {
+
+      console.error(
+        "Get user error:",
+        error
       );
 
-    if (!user) {
-      return res.status(404).json({
-        message: "User not found"
+
+      res.status(500).json({
+        message:
+          "Server error"
       });
+
     }
 
-    res.json({
-      user: {
-        id: user.id,
-        fullName: user.fullName,
-        email: user.email,
-        phone: user.phone,
-        balance: user.balance || 0
-      }
-    });
   }
 );
 
@@ -312,10 +546,6 @@ app.post(
       } = req.body;
 
 
-      // -----------------------------
-      // CHECK PAYLOR CONFIGURATION
-      // -----------------------------
-
       if (!PAYLOR_API_KEY) {
 
         console.error(
@@ -326,15 +556,13 @@ app.post(
           message:
             "Paylor API key is not configured"
         });
+
       }
 
 
-      // -----------------------------
-      // VALIDATE AMOUNT
-      // -----------------------------
-
       const depositAmount =
         Number(amount);
+
 
       if (
         !Number.isFinite(
@@ -347,12 +575,9 @@ app.post(
           message:
             "Enter a valid deposit amount"
         });
+
       }
 
-
-      // -----------------------------
-      // NORMALIZE PHONE NUMBER
-      // -----------------------------
 
       let normalizedPhone =
         String(phone || "")
@@ -375,12 +600,9 @@ app.post(
         normalizedPhone =
           "254" +
           normalizedPhone.substring(1);
+
       }
 
-
-      // -----------------------------
-      // VALIDATE KENYAN PHONE
-      // -----------------------------
 
       if (
         !/^254[17]\d{8}$/.test(
@@ -392,12 +614,9 @@ app.post(
           message:
             "Enter a valid Kenyan M-Pesa phone number"
         });
+
       }
 
-
-      // -----------------------------
-      // UNIQUE PAYMENT REFERENCE
-      // -----------------------------
 
       const reference =
         "FORTIVA-" +
@@ -409,40 +628,41 @@ app.post(
           .toUpperCase();
 
 
-      // -----------------------------
-      // CREATE DEPOSIT RECORD
-      // -----------------------------
-
-      const deposit = {
-
-        id: Date.now().toString(),
-
-        userId: req.user.id,
-
-        amount: depositAmount,
-
-        phone: normalizedPhone,
-
-        reference,
-
-        status: "PENDING",
-
-        createdAt:
-          new Date().toISOString()
-      };
-
-      deposits.push(deposit);
+      const depositId =
+        crypto.randomUUID();
 
 
-      // -----------------------------
-      // PAYLOR REQUEST
-      // -----------------------------
+      await pool.query(
+        `
+        INSERT INTO deposits
+        (
+          id,
+          user_id,
+          amount,
+          phone,
+          reference,
+          status
+        )
+        VALUES ($1, $2, $3, $4, $5, $6)
+        `,
+        [
+          depositId,
+          req.user.id,
+          depositAmount,
+          normalizedPhone,
+          reference,
+          "PENDING"
+        ]
+      );
+
 
       const paylorBody = {
 
-        phone: normalizedPhone,
+        phone:
+          normalizedPhone,
 
-        amount: depositAmount,
+        amount:
+          depositAmount,
 
         reference,
 
@@ -451,22 +671,27 @@ app.post(
 
         callbackUrl:
           `${BACKEND_URL}/api/paylor-callback`
+
       };
 
 
-      // Only send channelId when it exists
       if (PAYLOR_CHANNEL_ID) {
 
         paylorBody.channelId =
           PAYLOR_CHANNEL_ID;
+
       }
 
 
       console.log(
         "Sending Paylor STK Push:",
         {
-          phone: normalizedPhone,
-          amount: depositAmount,
+          phone:
+            normalizedPhone,
+
+          amount:
+            depositAmount,
+
           reference
         }
       );
@@ -476,9 +701,12 @@ app.post(
         await fetch(
           `${PAYLOR_BASE_URL}/merchants/payments/stk-push`,
           {
-            method: "POST",
+
+            method:
+              "POST",
 
             headers: {
+
               "Authorization":
                 `Bearer ${PAYLOR_API_KEY}`,
 
@@ -487,12 +715,14 @@ app.post(
 
               "Idempotency-Key":
                 reference
+
             },
 
             body:
               JSON.stringify(
                 paylorBody
               )
+
           }
         );
 
@@ -510,13 +740,21 @@ app.post(
       );
 
 
-      // -----------------------------
-      // PAYLOR ERROR
-      // -----------------------------
-
       if (!paylorResponse.ok) {
 
-        deposit.status = "FAILED";
+        await pool.query(
+          `
+          UPDATE deposits
+          SET status = $1,
+              failed_at = CURRENT_TIMESTAMP
+          WHERE id = $2
+          `,
+          [
+            "FAILED",
+            depositId
+          ]
+        );
+
 
         return res.status(
           paylorResponse.status
@@ -533,22 +771,36 @@ app.post(
             null,
 
           reference
+
         });
+
       }
 
 
-      // -----------------------------
-      // STK PUSH SENT
-      // -----------------------------
-
-      deposit.gatewayTransactionId =
+      const gatewayTransactionId =
         paylorData.transactionId ||
         paylorData.id ||
         null;
 
-      deposit.status =
+
+      const gatewayStatus =
         paylorData.status ||
         "SENT";
+
+
+      await pool.query(
+        `
+        UPDATE deposits
+        SET gateway_transaction_id = $1,
+            status = $2
+        WHERE id = $3
+        `,
+        [
+          gatewayTransactionId,
+          gatewayStatus,
+          depositId
+        ]
+      );
 
 
       return res.json({
@@ -557,13 +809,15 @@ app.post(
           "STK Push sent successfully. Check your M-Pesa phone and enter your PIN.",
 
         status:
-          deposit.status,
+          gatewayStatus,
 
         transactionId:
-          deposit.gatewayTransactionId,
+          gatewayTransactionId,
 
         reference
+
       });
+
 
     } catch (error) {
 
@@ -572,11 +826,14 @@ app.post(
         error
       );
 
-      return res.status(500).json({
+
+      res.status(500).json({
         message:
           "Unable to send STK Push"
       });
+
     }
+
   }
 );
 
@@ -596,6 +853,7 @@ app.post(
           "x-webhook-signature"
         ];
 
+
       if (!PAYLOR_WEBHOOK_SECRET) {
 
         console.error(
@@ -606,6 +864,7 @@ app.post(
           message:
             "Webhook secret is not configured"
         });
+
       }
 
 
@@ -615,6 +874,7 @@ app.post(
           message:
             "Missing webhook signature"
         });
+
       }
 
 
@@ -636,6 +896,7 @@ app.post(
           "utf8"
         );
 
+
       const expectedBuffer =
         Buffer.from(
           expectedSignature,
@@ -645,7 +906,7 @@ app.post(
 
       if (
         signatureBuffer.length !==
-        expectedBuffer.length ||
+          expectedBuffer.length ||
         !crypto.timingSafeEqual(
           signatureBuffer,
           expectedBuffer
@@ -660,6 +921,7 @@ app.post(
           message:
             "Invalid webhook signature"
         });
+
       }
 
 
@@ -681,6 +943,7 @@ app.post(
         return res.json({
           received: true
         });
+
       }
 
 
@@ -688,15 +951,23 @@ app.post(
         transaction.reference;
 
 
-      const deposit =
-        deposits.find(
-          item =>
-            item.reference ===
+      const depositResult =
+        await pool.query(
+          `
+          SELECT *
+          FROM deposits
+          WHERE reference = $1
+          LIMIT 1
+          `,
+          [
             reference
+          ]
         );
 
 
-      if (!deposit) {
+      if (
+        depositResult.rows.length === 0
+      ) {
 
         console.warn(
           "Deposit not found:",
@@ -706,75 +977,132 @@ app.post(
         return res.json({
           received: true
         });
+
       }
 
 
-      // -----------------------------
+      const deposit =
+        depositResult.rows[0];
+
+
+      // ----------------------------------------
       // PAYMENT SUCCESS
-      // -----------------------------
+      // ----------------------------------------
 
       if (
         event === "payment.success" ||
         transaction.status === "COMPLETED"
       ) {
 
-        deposit.status =
-          "COMPLETED";
+        // Prevent adding the same deposit twice
+        if (
+          deposit.status !== "COMPLETED"
+        ) {
 
-        deposit.providerRef =
-          transaction.providerRef ||
-          null;
+          const client =
+            await pool.connect();
 
-        deposit.mpesaReceipt =
-          transaction.mpesaReceipt ||
-          null;
+          try {
 
-        deposit.completedAt =
-          new Date().toISOString();
-
-
-        // Find account
-        const user =
-          users.find(
-            item =>
-              item.id ===
-              deposit.userId
-          );
+            await client.query(
+              "BEGIN"
+            );
 
 
-        if (user) {
+            await client.query(
+              `
+              UPDATE deposits
+              SET status = $1,
+                  provider_ref = $2,
+                  mpesa_receipt = $3,
+                  completed_at = CURRENT_TIMESTAMP
+              WHERE id = $4
+              `,
+              [
+                "COMPLETED",
 
-          user.balance =
-            (user.balance || 0) +
-            Number(deposit.amount);
+                transaction.providerRef ||
+                  null,
 
-          console.log(
-            `Deposit completed for ${user.email}: KES ${deposit.amount}`
-          );
+                transaction.mpesaReceipt ||
+                  null,
+
+                deposit.id
+              ]
+            );
+
+
+            await client.query(
+              `
+              UPDATE users
+              SET balance = balance + $1
+              WHERE id = $2
+              `,
+              [
+                Number(deposit.amount),
+                deposit.user_id
+              ]
+            );
+
+
+            await client.query(
+              "COMMIT"
+            );
+
+
+            console.log(
+              `Deposit completed: ${deposit.reference} KES ${deposit.amount}`
+            );
+
+
+          } catch (error) {
+
+            await client.query(
+              "ROLLBACK"
+            );
+
+            throw error;
+
+          } finally {
+
+            client.release();
+
+          }
+
         }
+
       }
 
 
-      // -----------------------------
+      // ----------------------------------------
       // PAYMENT FAILED
-      // -----------------------------
+      // ----------------------------------------
 
       if (
         event === "payment.failed" ||
         transaction.status === "FAILED"
       ) {
 
-        deposit.status =
-          "FAILED";
+        await pool.query(
+          `
+          UPDATE deposits
+          SET status = $1,
+              failed_at = CURRENT_TIMESTAMP
+          WHERE id = $2
+          `,
+          [
+            "FAILED",
+            deposit.id
+          ]
+        );
 
-        deposit.failedAt =
-          new Date().toISOString();
       }
 
 
       return res.json({
         received: true
       });
+
 
     } catch (error) {
 
@@ -783,11 +1111,14 @@ app.post(
         error
       );
 
+
       return res.status(500).json({
         message:
           "Callback processing error"
       });
+
     }
+
   }
 );
 
@@ -796,12 +1127,21 @@ app.post(
 // START SERVER
 // --------------------------------------------------
 
-app.listen(
-  PORT,
-  () => {
+async function startServer() {
 
-    console.log(
-      `Fortiva Capital backend running on port ${PORT}`
-    );
-  }
-);
+  await setupDatabase();
+
+  app.listen(
+    PORT,
+    () => {
+
+      console.log(
+        `Fortiva Capital backend running on port ${PORT}`
+      );
+
+    }
+  );
+
+}
+
+startServer();
