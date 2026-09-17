@@ -7,6 +7,10 @@ const { Pool } = require("pg");
 
 const app = express();
 
+// ======================================================
+// CONFIGURATION
+// ======================================================
+
 const PORT = process.env.PORT || 10000;
 
 const JWT_SECRET =
@@ -25,15 +29,14 @@ const BACKEND_URL =
 const PAYLOR_BASE_URL =
   "https://api.paylorke.com/api/v1";
 
-
-// --------------------------------------------------
-// POSTGRESQL DATABASE
-// --------------------------------------------------
-
 if (!DATABASE_URL) {
   console.error("DATABASE_URL is not configured");
   process.exit(1);
 }
+
+// ======================================================
+// DATABASE
+// ======================================================
 
 const pool = new Pool({
   connectionString: DATABASE_URL,
@@ -42,29 +45,31 @@ const pool = new Pool({
   }
 });
 
-
-// --------------------------------------------------
+// ======================================================
 // MIDDLEWARE
-// --------------------------------------------------
+// ======================================================
 
 app.use(cors());
 
+// IMPORTANT:
+// Paylor callback MUST receive the original raw body
+// so the webhook signature can be verified correctly.
 app.use(
-  express.json({
-    verify: (req, res, buf) => {
-      req.rawBody = Buffer.from(buf);
-    }
+  "/api/paylor-callback",
+  express.raw({
+    type: "*/*"
   })
 );
 
+// Normal JSON for all other routes
+app.use(express.json());
 
-// --------------------------------------------------
+// ======================================================
 // DATABASE SETUP
-// --------------------------------------------------
+// ======================================================
 
 async function setupDatabase() {
   try {
-
     await pool.query(`
       CREATE TABLE IF NOT EXISTS users (
         id TEXT PRIMARY KEY,
@@ -108,24 +113,26 @@ async function setupDatabase() {
   }
 }
 
-
-// --------------------------------------------------
-// HEALTH CHECK
-// --------------------------------------------------
+// ======================================================
+// HOME
+// ======================================================
 
 app.get("/", (req, res) => {
 
   res.json({
-    message: "Fortiva Capital backend is running",
-    database: "connected"
+    message:
+      "Fortiva Capital backend is running",
+    database:
+      "connected",
+    paymentGateway:
+      "Paylor"
   });
 
 });
 
-
-// --------------------------------------------------
+// ======================================================
 // REGISTER
-// --------------------------------------------------
+// ======================================================
 
 app.post("/api/register", async (req, res) => {
 
@@ -138,26 +145,36 @@ app.post("/api/register", async (req, res) => {
       password
     } = req.body;
 
-    if (!fullName || !email || !phone || !password) {
+    if (
+      !fullName ||
+      !email ||
+      !phone ||
+      !password
+    ) {
 
       return res.status(400).json({
-        message: "All fields are required"
+        message:
+          "All fields are required"
       });
-
     }
 
     const cleanEmail =
-      email.trim().toLowerCase();
+      String(email)
+        .trim()
+        .toLowerCase();
 
     const cleanPhone =
-      phone.trim();
+      String(phone)
+        .trim()
+        .replace(/\s+/g, "");
 
     const existingUser =
       await pool.query(
         `
         SELECT id
         FROM users
-        WHERE email = $1 OR phone = $2
+        WHERE email = $1
+           OR phone = $2
         LIMIT 1
         `,
         [
@@ -166,13 +183,14 @@ app.post("/api/register", async (req, res) => {
         ]
       );
 
-    if (existingUser.rows.length > 0) {
+    if (
+      existingUser.rows.length > 0
+    ) {
 
       return res.status(409).json({
         message:
           "Email or phone number already registered"
       });
-
     }
 
     const hashedPassword =
@@ -195,11 +213,12 @@ app.post("/api/register", async (req, res) => {
         password,
         balance
       )
-      VALUES ($1, $2, $3, $4, $5, $6)
+      VALUES
+      ($1, $2, $3, $4, $5, $6)
       `,
       [
         userId,
-        fullName.trim(),
+        String(fullName).trim(),
         cleanEmail,
         cleanPhone,
         hashedPassword,
@@ -207,11 +226,9 @@ app.post("/api/register", async (req, res) => {
       ]
     );
 
-    res.status(201).json({
-
+    return res.status(201).json({
       message:
         "Account created successfully"
-
     });
 
   } catch (error) {
@@ -221,18 +238,16 @@ app.post("/api/register", async (req, res) => {
       error
     );
 
-    res.status(500).json({
-      message: "Server error"
+    return res.status(500).json({
+      message:
+        "Server error"
     });
-
   }
-
 });
 
-
-// --------------------------------------------------
+// ======================================================
 // LOGIN
-// --------------------------------------------------
+// ======================================================
 
 app.post("/api/login", async (req, res) => {
 
@@ -243,17 +258,19 @@ app.post("/api/login", async (req, res) => {
       password
     } = req.body;
 
-    if (!identifier || !password) {
+    if (
+      !identifier ||
+      !password
+    ) {
 
       return res.status(400).json({
         message:
           "Phone number/email and password are required"
       });
-
     }
 
     const loginValue =
-      identifier.trim();
+      String(identifier).trim();
 
     const result =
       await pool.query(
@@ -264,18 +281,17 @@ app.post("/api/login", async (req, res) => {
            OR phone = $1
         LIMIT 1
         `,
-        [
-          loginValue
-        ]
+        [loginValue]
       );
 
-    if (result.rows.length === 0) {
+    if (
+      result.rows.length === 0
+    ) {
 
       return res.status(401).json({
         message:
           "Invalid phone number/email or password"
       });
-
     }
 
     const user =
@@ -293,7 +309,6 @@ app.post("/api/login", async (req, res) => {
         message:
           "Invalid phone number/email or password"
       });
-
     }
 
     const token =
@@ -309,7 +324,7 @@ app.post("/api/login", async (req, res) => {
         }
       );
 
-    res.json({
+    return res.json({
 
       message:
         "Login successful",
@@ -317,22 +332,15 @@ app.post("/api/login", async (req, res) => {
       token,
 
       user: {
-
-        id:
-          user.id,
-
+        id: user.id,
         fullName:
           user.full_name,
-
         email:
           user.email,
-
         phone:
           user.phone,
-
         balance:
           Number(user.balance || 0)
-
       }
 
     });
@@ -344,20 +352,22 @@ app.post("/api/login", async (req, res) => {
       error
     );
 
-    res.status(500).json({
-      message: "Server error"
+    return res.status(500).json({
+      message:
+        "Server error"
     });
-
   }
-
 });
 
+// ======================================================
+// AUTHENTICATION
+// ======================================================
 
-// --------------------------------------------------
-// JWT AUTHENTICATION
-// --------------------------------------------------
-
-function authenticateToken(req, res, next) {
+function authenticateToken(
+  req,
+  res,
+  next
+) {
 
   const authHeader =
     req.headers.authorization;
@@ -368,7 +378,6 @@ function authenticateToken(req, res, next) {
       message:
         "Authentication required"
     });
-
   }
 
   const parts =
@@ -383,7 +392,6 @@ function authenticateToken(req, res, next) {
       message:
         "Invalid authorization header"
     });
-
   }
 
   const token =
@@ -408,15 +416,12 @@ function authenticateToken(req, res, next) {
       message:
         "Invalid or expired token"
     });
-
   }
-
 }
 
-
-// --------------------------------------------------
+// ======================================================
 // GET CURRENT USER
-// --------------------------------------------------
+// ======================================================
 
 app.get(
   "/api/me",
@@ -438,42 +443,34 @@ app.get(
           WHERE id = $1
           LIMIT 1
           `,
-          [
-            req.user.id
-          ]
+          [req.user.id]
         );
 
-      if (result.rows.length === 0) {
+      if (
+        result.rows.length === 0
+      ) {
 
         return res.status(404).json({
           message:
             "User not found"
         });
-
       }
 
       const user =
         result.rows[0];
 
-      res.json({
+      return res.json({
 
         user: {
-
-          id:
-            user.id,
-
+          id: user.id,
           fullName:
             user.full_name,
-
           email:
             user.email,
-
           phone:
             user.phone,
-
           balance:
             Number(user.balance || 0)
-
         }
 
       });
@@ -485,20 +482,196 @@ app.get(
         error
       );
 
-      res.status(500).json({
+      return res.status(500).json({
         message:
           "Server error"
       });
-
     }
-
   }
 );
 
+// ======================================================
+// HELPER:
+// COMPLETE A DEPOSIT AND CREDIT THE USER
+// ======================================================
 
-// --------------------------------------------------
-// DEPOSIT / PAYLOR STK PUSH
-// --------------------------------------------------
+async function completeDeposit(
+  deposit,
+  payment
+) {
+
+  const client =
+    await pool.connect();
+
+  try {
+
+    await client.query(
+      "BEGIN"
+    );
+
+    // Lock this deposit so the
+    // webhook and status checker
+    // cannot credit it twice.
+    const lockedDeposit =
+      await client.query(
+        `
+        SELECT *
+        FROM deposits
+        WHERE id = $1
+        FOR UPDATE
+        `,
+        [deposit.id]
+      );
+
+    if (
+      lockedDeposit.rows.length === 0
+    ) {
+
+      await client.query(
+        "ROLLBACK"
+      );
+
+      return false;
+    }
+
+    const currentDeposit =
+      lockedDeposit.rows[0];
+
+    // Already completed:
+    // DO NOT credit again.
+    if (
+      currentDeposit.status ===
+      "COMPLETED"
+    ) {
+
+      await client.query(
+        "COMMIT"
+      );
+
+      console.log(
+        "Deposit already completed:",
+        currentDeposit.reference
+      );
+
+      return true;
+    }
+
+    const providerRef =
+      payment?.providerRef ||
+      payment?.provider_ref ||
+      payment?.data?.providerRef ||
+      payment?.data?.provider_ref ||
+      null;
+
+    const mpesaReceipt =
+      payment?.mpesaReceipt ||
+      payment?.mpesa_receipt ||
+      payment?.metadata?.mpesaReceipt ||
+      payment?.metadata?.mpesa_receipt ||
+      payment?.data?.mpesaReceipt ||
+      payment?.data?.metadata?.mpesaReceipt ||
+      null;
+
+    await client.query(
+      `
+      UPDATE deposits
+      SET
+        status = $1,
+        gateway_transaction_id =
+          COALESCE($2, gateway_transaction_id),
+        provider_ref = $3,
+        mpesa_receipt = $4,
+        completed_at =
+          CURRENT_TIMESTAMP,
+        failed_at = NULL
+      WHERE id = $5
+      `,
+      [
+        "COMPLETED",
+        payment?.transactionId ||
+          payment?.id ||
+          null,
+        providerRef,
+        mpesaReceipt,
+        currentDeposit.id
+      ]
+    );
+
+    await client.query(
+      `
+      UPDATE users
+      SET balance =
+        balance + $1
+      WHERE id = $2
+      `,
+      [
+        Number(
+          currentDeposit.amount
+        ),
+        currentDeposit.user_id
+      ]
+    );
+
+    await client.query(
+      "COMMIT"
+    );
+
+    console.log(
+      "================================="
+    );
+
+    console.log(
+      "DEPOSIT COMPLETED"
+    );
+
+    console.log(
+      "Reference:",
+      currentDeposit.reference
+    );
+
+    console.log(
+      "Amount:",
+      currentDeposit.amount
+    );
+
+    console.log(
+      "User:",
+      currentDeposit.user_id
+    );
+
+    console.log(
+      "Provider Ref:",
+      providerRef
+    );
+
+    console.log(
+      "M-Pesa Receipt:",
+      mpesaReceipt
+    );
+
+    console.log(
+      "================================="
+    );
+
+    return true;
+
+  } catch (error) {
+
+    await client.query(
+      "ROLLBACK"
+    );
+
+    throw error;
+
+  } finally {
+
+    client.release();
+  }
+}
+
+// ======================================================
+// DEPOSIT
+// ======================================================
 
 app.post(
   "/api/deposit",
@@ -507,10 +680,20 @@ app.post(
 
     try {
 
-      const {
+      let {
         amount,
         phone
       } = req.body;
+
+      console.log(
+        "DEPOSIT REQUEST FROM FRONTEND:",
+        {
+          amount,
+          phone,
+          userId:
+            req.user.id
+        }
+      );
 
       if (!PAYLOR_API_KEY) {
 
@@ -522,7 +705,6 @@ app.post(
           message:
             "Paylor API key is not configured"
         });
-
       }
 
       const depositAmount =
@@ -539,57 +721,53 @@ app.post(
           message:
             "Enter a valid deposit amount"
         });
-
       }
 
-      let normalizedPhone =
+      phone =
         String(phone || "")
           .trim()
           .replace(/\s+/g, "");
 
       if (
-        normalizedPhone.startsWith("+254")
+        phone.startsWith("+254")
       ) {
 
-        normalizedPhone =
-          normalizedPhone.substring(1);
+        phone =
+          phone.substring(1);
 
       } else if (
-        normalizedPhone.startsWith("07") ||
-        normalizedPhone.startsWith("01")
+        phone.startsWith("07") ||
+        phone.startsWith("01")
       ) {
 
-        normalizedPhone =
+        phone =
           "254" +
-          normalizedPhone.substring(1);
-
+          phone.substring(1);
       }
 
       if (
-        !/^254[17]\d{8}$/.test(
-          normalizedPhone
-        )
+        !/^254[17]\d{8}$/.test(phone)
       ) {
 
         return res.status(400).json({
           message:
             "Enter a valid Kenyan M-Pesa phone number"
         });
-
       }
 
       const reference =
         "FORTIVA-" +
         Date.now() +
         "-" +
-        crypto
-          .randomBytes(4)
-          .toString("hex")
-          .toUpperCase();
+        Math.floor(
+          Math.random() * 10000
+        );
 
       const depositId =
         crypto.randomUUID();
 
+      // Save the deposit BEFORE
+      // sending the STK request.
       await pool.query(
         `
         INSERT INTO deposits
@@ -601,33 +779,37 @@ app.post(
           reference,
           status
         )
-        VALUES ($1, $2, $3, $4, $5, $6)
+        VALUES
+        ($1, $2, $3, $4, $5, $6)
         `,
         [
           depositId,
           req.user.id,
           depositAmount,
-          normalizedPhone,
+          phone,
           reference,
           "PENDING"
         ]
       );
 
+      const callbackUrl =
+        `${BACKEND_URL}/api/paylor-callback`;
+
       const paylorBody = {
 
-        phone:
-          normalizedPhone,
+        phone: phone,
 
         amount:
           depositAmount,
 
-        reference,
+        reference:
+          reference,
 
         description:
-          `Fortiva Capital deposit ${reference}`,
+          "Fortiva Capital Deposit",
 
         callbackUrl:
-          `${BACKEND_URL}/api/paylor-callback`
+          callbackUrl
 
       };
 
@@ -635,69 +817,88 @@ app.post(
 
         paylorBody.channelId =
           PAYLOR_CHANNEL_ID;
-
       }
 
+      console.log("");
       console.log(
-        "Sending Paylor STK Push:",
-        {
-          phone:
-            normalizedPhone,
-
-          amount:
-            depositAmount,
-
-          reference
-        }
+        "================================="
+      );
+      console.log(
+        "       PAYLOR STK PUSH"
+      );
+      console.log(
+        "================================="
+      );
+      console.log(
+        "Phone:",
+        phone
+      );
+      console.log(
+        "Amount:",
+        depositAmount
+      );
+      console.log(
+        "Reference:",
+        reference
+      );
+      console.log(
+        "Callback:",
+        callbackUrl
+      );
+      console.log(
+        "================================="
       );
 
-      const paylorResponse =
+      const response =
         await fetch(
           `${PAYLOR_BASE_URL}/merchants/payments/stk-push`,
           {
-
-            method:
-              "POST",
+            method: "POST",
 
             headers: {
-
-              "Authorization":
+              Authorization:
                 `Bearer ${PAYLOR_API_KEY}`,
 
               "Content-Type":
                 "application/json",
 
+              Accept:
+                "application/json",
+
               "Idempotency-Key":
                 reference
-
             },
 
             body:
               JSON.stringify(
                 paylorBody
               )
-
           }
         );
 
-      const paylorData =
-        await paylorResponse
+      const responseData =
+        await response
           .json()
           .catch(() => ({}));
 
+      console.log("");
       console.log(
-        "Paylor response:",
-        paylorResponse.status,
-        paylorData
+        "===== PAYLOR RESPONSE ====="
+      );
+      console.log(
+        response.status,
+        responseData
       );
 
-      if (!paylorResponse.ok) {
+      if (!response.ok) {
 
         await pool.query(
           `
           UPDATE deposits
-          SET status = $1,
-              failed_at = CURRENT_TIMESTAMP
+          SET
+            status = $1,
+            failed_at =
+              CURRENT_TIMESTAMP
           WHERE id = $2
           `,
           [
@@ -707,60 +908,97 @@ app.post(
         );
 
         return res.status(
-          paylorResponse.status
+          response.status
         ).json({
 
+          success: false,
+
           message:
-            paylorData?.error?.message ||
-            paylorData?.message ||
+            responseData?.error?.message ||
+            responseData?.message ||
             "Paylor could not initiate the STK Push",
 
           error:
-            paylorData?.error?.code ||
-            paylorData?.error ||
+            responseData?.error?.code ||
+            responseData?.error ||
             null,
 
-          reference
+          reference:
+            reference
 
         });
-
       }
 
-      const gatewayTransactionId =
-        paylorData.transactionId ||
-        paylorData.id ||
+      const transactionId =
+        responseData?.transactionId ||
+        responseData?.id ||
         null;
 
-      const gatewayStatus =
-        paylorData.status ||
+      const status =
+        responseData?.status ||
         "SENT";
+
+      if (!transactionId) {
+
+        await pool.query(
+          `
+          UPDATE deposits
+          SET
+            status = $1,
+            failed_at =
+              CURRENT_TIMESTAMP
+          WHERE id = $2
+          `,
+          [
+            "FAILED",
+            depositId
+          ]
+        );
+
+        return res.status(502).json({
+          success: false,
+          message:
+            "Paylor did not return a transaction ID",
+          data:
+            responseData
+        });
+      }
 
       await pool.query(
         `
         UPDATE deposits
-        SET gateway_transaction_id = $1,
-            status = $2
+        SET
+          gateway_transaction_id = $1,
+          status = $2
         WHERE id = $3
         `,
         [
-          gatewayTransactionId,
-          gatewayStatus,
+          transactionId,
+          status,
           depositId
         ]
       );
 
       return res.json({
 
-        message:
-          "STK Push sent successfully. Check your M-Pesa phone and enter your PIN.",
+        success: true,
 
-        status:
-          gatewayStatus,
+        paid: false,
 
         transactionId:
-          gatewayTransactionId,
+          transactionId,
 
-        reference
+        checkout_request_id:
+          transactionId,
+
+        reference:
+          reference,
+
+        status:
+          status,
+
+        data:
+          responseData
 
       });
 
@@ -771,20 +1009,18 @@ app.post(
         error
       );
 
-      res.status(500).json({
+      return res.status(500).json({
+        success: false,
         message:
           "Unable to send STK Push"
       });
-
     }
-
   }
 );
 
-
-// --------------------------------------------------
-// PAYLOR CALLBACK
-// --------------------------------------------------
+// ======================================================
+// PAYLOR WEBHOOK
+// ======================================================
 
 app.post(
   "/api/paylor-callback",
@@ -792,9 +1028,28 @@ app.post(
 
     try {
 
-      const receivedSignature =
-        req.headers["x-webhook-signature"];
+      const signature =
+        req.headers[
+          "x-webhook-signature"
+        ];
 
+      console.log("");
+      console.log(
+        "================================="
+      );
+      console.log(
+        "       PAYLOR WEBHOOK"
+      );
+      console.log(
+        "================================="
+      );
+
+      console.log(
+        "Webhook signature:",
+        signature
+          ? "[received]"
+          : "[missing]"
+      );
 
       if (!PAYLOR_WEBHOOK_SECRET) {
 
@@ -803,90 +1058,84 @@ app.post(
         );
 
         return res.status(500).json({
+          success: false,
           message:
             "Webhook secret is not configured"
         });
-
       }
 
-
-      if (!receivedSignature) {
+      if (!signature) {
 
         console.error(
-          "Paylor callback received without signature"
+          "Paylor webhook: missing signature"
         );
 
         return res.status(401).json({
+          success: false,
           message:
             "Missing webhook signature"
         });
-
       }
 
+      const rawBody =
+        Buffer.isBuffer(req.body)
+          ? req.body
+          : Buffer.from(
+              JSON.stringify(
+                req.body || {}
+              )
+            );
 
-      if (!req.rawBody) {
+      console.log(
+        "Raw webhook body:",
+        rawBody.toString("utf8")
+      );
 
-        console.error(
-          "Paylor callback raw body is missing"
-        );
-
-        return res.status(400).json({
-          message:
-            "Webhook raw body is missing"
-        });
-
-      }
-
-
-      // Paylor signs the exact raw request body
+      // Same signature method as the
+      // working Paylor integration.
       const expectedSignature =
         crypto
           .createHmac(
             "sha256",
-            PAYLOR_WEBHOOK_SECRET.trim()
+            PAYLOR_WEBHOOK_SECRET
           )
-          .update(req.rawBody)
+          .update(rawBody)
           .digest("hex");
 
-
-      // Normalize received signature
-      let signature =
-        String(receivedSignature)
+      let receivedSignature =
+        String(signature)
           .trim()
           .toLowerCase();
 
-
-      // Support:
-      // abc123...
-      // sha256=abc123...
+      // Some webhook systems prefix
+      // the signature with sha256=.
       if (
-        signature.startsWith("sha256=")
+        receivedSignature.startsWith(
+          "sha256="
+        )
       ) {
 
-        signature =
-          signature.substring(7);
-
+        receivedSignature =
+          receivedSignature.substring(
+            7
+          );
       }
 
-
       console.log(
-        "Paylor webhook signature check:",
-        {
-          receivedLength:
-            signature.length,
-
-          expectedLength:
-            expectedSignature.length
-        }
+        "Received signature length:",
+        receivedSignature.length
       );
 
+      console.log(
+        "Expected signature length:",
+        expectedSignature.length
+      );
 
-      const signatureBuffer =
+      const receivedBuffer =
         Buffer.from(
-          signature,
+          receivedSignature,
           "utf8"
         );
-
 
       const expectedBuffer =
         Buffer.from(
@@ -894,71 +1143,126 @@ app.post(
           "utf8"
         );
 
+      if (
+        receivedBuffer.length !==
+        expectedBuffer.length
+      ) {
+
+        console.error(
+          "Paylor webhook: invalid signature"
+        );
+
+        return res.status(401).json({
+          success: false,
+          message:
+            "Invalid signature"
+        });
+      }
 
       if (
-        signatureBuffer.length !==
-          expectedBuffer.length ||
         !crypto.timingSafeEqual(
-          signatureBuffer,
+          receivedBuffer,
           expectedBuffer
         )
       ) {
 
         console.error(
-          "Invalid Paylor webhook signature"
+          "Paylor webhook: invalid signature"
         );
 
         return res.status(401).json({
+          success: false,
           message:
-            "Invalid webhook signature"
+            "Invalid signature"
         });
-
       }
-
 
       console.log(
         "Paylor webhook signature verified successfully"
       );
 
+      let payment;
 
-      const {
-        event,
-        transaction
-      } = req.body;
+      try {
 
+        payment =
+          JSON.parse(
+            rawBody.toString("utf8")
+          );
 
-      console.log(
-        "Paylor callback:",
-        event,
-        transaction
-      );
+      } catch (error) {
 
+        console.error(
+          "Invalid webhook JSON:",
+          error.message
+        );
 
-      if (!transaction) {
-
-        return res.json({
-          received: true
+        return res.status(400).json({
+          success: false,
+          message:
+            "Invalid webhook JSON"
         });
-
       }
 
+      console.log(
+        "Webhook payment:",
+        payment
+      );
+
+      // ==================================================
+      // FIND TRANSACTION
+      // ==================================================
+
+      const transaction =
+        payment?.transaction ||
+        payment?.data?.transaction ||
+        payment;
 
       const reference =
-        transaction.reference;
+        transaction?.reference ||
+        payment?.reference ||
+        null;
 
+      const transactionId =
+        transaction?.transactionId ||
+        transaction?.id ||
+        payment?.transactionId ||
+        payment?.id ||
+        null;
+
+      const paymentStatus =
+        String(
+          transaction?.status ||
+          payment?.status ||
+          ""
+        ).toUpperCase();
+
+      console.log(
+        "Webhook transaction ID:",
+        transactionId
+      );
+
+      console.log(
+        "Webhook reference:",
+        reference
+      );
+
+      console.log(
+        "Webhook status:",
+        paymentStatus
+      );
 
       if (!reference) {
 
         console.warn(
-          "Paylor callback has no transaction reference"
+          "Paylor webhook has no reference"
         );
 
-        return res.json({
+        return res.status(200).json({
+          success: true,
           received: true
         });
-
       }
-
 
       const depositResult =
         await pool.query(
@@ -968,11 +1272,8 @@ app.post(
           WHERE reference = $1
           LIMIT 1
           `,
-          [
-            reference
-          ]
+          [reference]
         );
-
 
       if (
         depositResult.rows.length === 0
@@ -983,178 +1284,57 @@ app.post(
           reference
         );
 
-        return res.json({
+        return res.status(200).json({
+          success: true,
           received: true
         });
-
       }
-
 
       const deposit =
         depositResult.rows[0];
 
-
-      // ----------------------------------------
-      // PAYMENT SUCCESS
-      // ----------------------------------------
+      // ==================================================
+      // SUCCESS
+      // ==================================================
 
       if (
-        event === "payment.success" ||
-        transaction.status === "COMPLETED"
+        paymentStatus ===
+          "COMPLETED" ||
+        payment?.event ===
+          "payment.success"
       ) {
 
-        if (
-          deposit.status !== "COMPLETED"
-        ) {
-
-          const client =
-            await pool.connect();
-
-          try {
-
-            await client.query(
-              "BEGIN"
-            );
-
-
-            // Re-check inside the transaction
-            const lockedDeposit =
-              await client.query(
-                `
-                SELECT *
-                FROM deposits
-                WHERE id = $1
-                FOR UPDATE
-                `,
-                [
-                  deposit.id
-                ]
-              );
-
-
-            if (
-              lockedDeposit.rows.length === 0
-            ) {
-
-              await client.query(
-                "ROLLBACK"
-              );
-
-              return res.json({
-                received: true
-              });
-
-            }
-
-
-            const currentDeposit =
-              lockedDeposit.rows[0];
-
-
-            if (
-              currentDeposit.status !==
-              "COMPLETED"
-            ) {
-
-              await client.query(
-                `
-                UPDATE deposits
-                SET status = $1,
-                    provider_ref = $2,
-                    mpesa_receipt = $3,
-                    completed_at = CURRENT_TIMESTAMP
-                WHERE id = $4
-                `,
-                [
-                  "COMPLETED",
-
-                  transaction.providerRef ||
-                    transaction.provider_ref ||
-                    null,
-
-                  transaction.mpesaReceipt ||
-                    transaction.mpesa_receipt ||
-                    transaction.metadata?.mpesaReceipt ||
-                    null,
-
-                  currentDeposit.id
-                ]
-              );
-
-
-              await client.query(
-                `
-                UPDATE users
-                SET balance = balance + $1
-                WHERE id = $2
-                `,
-                [
-                  Number(
-                    currentDeposit.amount
-                  ),
-
-                  currentDeposit.user_id
-                ]
-              );
-
-
-              console.log(
-                `Deposit completed: ${currentDeposit.reference} KES ${currentDeposit.amount}`
-              );
-
-            } else {
-
-              console.log(
-                `Deposit already completed: ${currentDeposit.reference}`
-              );
-
-            }
-
-
-            await client.query(
-              "COMMIT"
-            );
-
-
-          } catch (error) {
-
-            await client.query(
-              "ROLLBACK"
-            );
-
-            throw error;
-
-          } finally {
-
-            client.release();
-
+        await completeDeposit(
+          deposit,
+          {
+            ...payment,
+            ...transaction,
+            transactionId:
+              transactionId
           }
-
-        } else {
-
-          console.log(
-            `Deposit already completed: ${deposit.reference}`
-          );
-
-        }
-
+        );
       }
 
-
-      // ----------------------------------------
-      // PAYMENT FAILED
-      // ----------------------------------------
+      // ==================================================
+      // FAILED / CANCELLED
+      // ==================================================
 
       if (
-        event === "payment.failed" ||
-        transaction.status === "FAILED"
+        paymentStatus ===
+          "FAILED" ||
+        paymentStatus ===
+          "CANCELLED" ||
+        payment?.event ===
+          "payment.failed"
       ) {
 
         await pool.query(
           `
           UPDATE deposits
-          SET status = $1,
-              failed_at = CURRENT_TIMESTAMP
+          SET
+            status = $1,
+            failed_at =
+              CURRENT_TIMESTAMP
           WHERE id = $2
             AND status <> 'COMPLETED'
           `,
@@ -1164,41 +1344,373 @@ app.post(
           ]
         );
 
-
         console.log(
-          `Deposit failed: ${deposit.reference}`
+          "Deposit marked failed:",
+          reference
         );
-
       }
 
+      console.log(
+        "================================="
+      );
 
-      return res.json({
+      return res.status(200).json({
+        success: true,
         received: true
       });
-
 
     } catch (error) {
 
       console.error(
-        "Paylor callback error:",
+        "Paylor webhook error:",
         error
       );
 
-
       return res.status(500).json({
+        success: false,
         message:
           "Callback processing error"
       });
-
     }
-
   }
 );
 
+// ======================================================
+// PAYMENT STATUS / RECONCILIATION
+// ======================================================
 
-// --------------------------------------------------
+app.post(
+  "/api/payment-status",
+  authenticateToken,
+  async (req, res) => {
+
+    console.log(
+      "PAYMENT STATUS REQUEST:",
+      req.body
+    );
+
+    try {
+
+      const transactionId =
+        req.body?.transactionId ||
+        req.body?.checkout_request_id ||
+        req.body?.transaction_id ||
+        req.query?.transactionId ||
+        req.query?.checkout_request_id;
+
+      console.log(
+        "RESOLVED TRANSACTION ID:",
+        transactionId
+      );
+
+      if (!transactionId) {
+
+        return res.status(400).json({
+          success: false,
+          message:
+            "transactionId is required"
+        });
+      }
+
+      if (!PAYLOR_API_KEY) {
+
+        return res.status(500).json({
+          success: false,
+          message:
+            "Paylor API key is not configured"
+        });
+      }
+
+      const response =
+        await fetch(
+          `${PAYLOR_BASE_URL}/merchants/payments/transactions/${encodeURIComponent(transactionId)}`,
+          {
+            method: "GET",
+
+            headers: {
+              Authorization:
+                `Bearer ${PAYLOR_API_KEY}`,
+
+              Accept:
+                "application/json"
+            }
+          }
+        );
+
+      const responseData =
+        await response
+          .json()
+          .catch(() => ({}));
+
+      console.log("");
+      console.log(
+        "===== PAYLOR PAYMENT STATUS ====="
+      );
+
+      console.log(
+        response.status,
+        responseData
+      );
+
+      if (!response.ok) {
+
+        return res.status(
+          response.status
+        ).json({
+
+          success: false,
+
+          message:
+            "Unable to check payment status",
+
+          data:
+            responseData
+
+        });
+      }
+
+      const payment =
+        responseData?.data ||
+        responseData?.transaction ||
+        responseData?.payment ||
+        responseData;
+
+      const paymentStatus =
+        String(
+          payment?.status ||
+          responseData?.status ||
+          ""
+        ).toUpperCase();
+
+      console.log(
+        "NORMALIZED PAYMENT STATUS:",
+        paymentStatus
+      );
+
+      // ==================================================
+      // RECONCILE DATABASE
+      // ==================================================
+
+      const depositResult =
+        await pool.query(
+          `
+          SELECT *
+          FROM deposits
+          WHERE gateway_transaction_id = $1
+          LIMIT 1
+          `,
+          [transactionId]
+        );
+
+      if (
+        depositResult.rows.length > 0
+      ) {
+
+        const deposit =
+          depositResult.rows[0];
+
+        if (
+          paymentStatus ===
+          "COMPLETED"
+        ) {
+
+          await completeDeposit(
+            deposit,
+            {
+              ...responseData,
+              ...payment,
+              transactionId:
+                transactionId
+            }
+          );
+
+        } else if (
+          paymentStatus ===
+            "FAILED" ||
+          paymentStatus ===
+            "CANCELLED"
+        ) {
+
+          await pool.query(
+            `
+            UPDATE deposits
+            SET
+              status = $1,
+              failed_at =
+                CURRENT_TIMESTAMP
+            WHERE id = $2
+              AND status <> 'COMPLETED'
+            `,
+            [
+              "FAILED",
+              deposit.id
+            ]
+          );
+
+        }
+      }
+
+      return res.json({
+
+        success: true,
+
+        status:
+          paymentStatus.toLowerCase(),
+
+        data:
+          responseData
+
+      });
+
+    } catch (error) {
+
+      console.error(
+        "Payment status error:",
+        error.response?.data ||
+        error.message ||
+        error
+      );
+
+      return res.status(
+        500
+      ).json({
+
+        success: false,
+
+        message:
+          "Unable to check payment status",
+
+        data:
+          null
+
+      });
+    }
+  }
+);
+
+// ======================================================
+// GET DEPOSIT HISTORY
+// ======================================================
+
+app.get(
+  "/api/deposits",
+  authenticateToken,
+  async (req, res) => {
+
+    try {
+
+      const result =
+        await pool.query(
+          `
+          SELECT
+            id,
+            amount,
+            phone,
+            reference,
+            status,
+            gateway_transaction_id,
+            provider_ref,
+            mpesa_receipt,
+            created_at,
+            completed_at,
+            failed_at
+          FROM deposits
+          WHERE user_id = $1
+          ORDER BY created_at DESC
+          `,
+          [req.user.id]
+        );
+
+      return res.json({
+        success: true,
+        deposits:
+          result.rows.map(
+            (deposit) => ({
+              id:
+                deposit.id,
+
+              amount:
+                Number(
+                  deposit.amount
+                ),
+
+              phone:
+                deposit.phone,
+
+              reference:
+                deposit.reference,
+
+              status:
+                deposit.status,
+
+              transactionId:
+                deposit.gateway_transaction_id,
+
+              providerRef:
+                deposit.provider_ref,
+
+              mpesaReceipt:
+                deposit.mpesa_receipt,
+
+              createdAt:
+                deposit.created_at,
+
+              completedAt:
+                deposit.completed_at,
+
+              failedAt:
+                deposit.failed_at
+            })
+          )
+      });
+
+    } catch (error) {
+
+      console.error(
+        "Deposit history error:",
+        error
+      );
+
+      return res.status(500).json({
+        success: false,
+        message:
+          "Unable to load deposit history"
+      });
+    }
+  }
+);
+
+// ======================================================
+// HEALTH CHECK
+// ======================================================
+
+app.get(
+  "/health",
+  (req, res) => {
+
+    res.json({
+
+      success: true,
+
+      service:
+        "Fortiva Capital Backend",
+
+      paymentGateway:
+        "Paylor",
+
+      database:
+        "PostgreSQL",
+
+      status:
+        "online"
+
+    });
+  }
+);
+
+// ======================================================
 // START SERVER
-// --------------------------------------------------
+// ======================================================
 
 async function startServer() {
 
@@ -1208,13 +1720,40 @@ async function startServer() {
     PORT,
     () => {
 
+      console.log("");
+
       console.log(
         `Fortiva Capital backend running on port ${PORT}`
       );
 
+      console.log(
+        "Paylor:",
+        PAYLOR_API_KEY
+          ? "API key configured"
+          : "API key missing"
+      );
+
+      console.log(
+        "Paylor channel:",
+        PAYLOR_CHANNEL_ID
+          ? "configured"
+          : "not configured"
+      );
+
+      console.log(
+        "Paylor webhook:",
+        PAYLOR_WEBHOOK_SECRET
+          ? "secret configured"
+          : "secret missing"
+      );
+
+      console.log(
+        "Backend URL:",
+        BACKEND_URL
+      );
+
     }
   );
-
 }
 
 startServer();
